@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>USB Access Form</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 40px;
+      background-color: #f5f5f5;
+    }
+    form {
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      max-width: 400px;
+      margin: auto;
+    }
+    input, button {
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 10px;
+      font-size: 16px;
+    }
+    #status {
+      text-align: center;
+      font-weight: bold;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h2 style="text-align:center">Please enter your name so if you forget to remove your USB, I can return it</h2>
+  <form id="usbForm">
+    <input type="text" name="name" placeholder="Your name" required><br>
+    <input type="text" name="phone" placeholder="Phone number" required><br>
+    <button type="submit">Submit</button>
+  </form>
+  <p id="status"></p>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io(); // Povezivanje sa serverom
+
+    document.getElementById('usbForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const body = new URLSearchParams(formData);
+
+      const res = await fetch('/submit', {
+        method: 'POST',
+        body
+      });
+
+      if (res.ok) {
+        document.getElementById('status').innerText = 'Access granted.';
+      } else {
+        document.getElementById('status').innerText = 'Submission failed.';
+      }
+    };
+
+    // Slušanje za događaj kada se USB ukloni
+    socket.on("usb-removed", (data) => {
+      if (data.removed) {
+        alert(`USB was removed. User: ${data.name}`);
+      }
+    });
+  </script>
+</body>
+</html>

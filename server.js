@@ -6,6 +6,7 @@ const usbDetect = require("usb-detection");
 const { exec } = require("child_process");
 const http = require("http");
 const socketIo = require("socket.io");
+const mysql = require("mysql2");
 
 const app = express();
 const server = http.createServer(app);
@@ -19,40 +20,78 @@ let currentUser = null;
 let usbJustRemoved = false;
 let formCompleted = false;
 
+// Setup MySQL connection
+const db = mysql.createConnection({
+  host: "localhost",
+  user: "your_mysql_user", // Change this
+  password: "your_mysql_password", // Change this
+  database: "usb_logs", // Make sure this DB exists
+});
+
+db.connect((err) => {
+  if (err) {
+    console.error("MySQL connection failed:", err);
+  } else {
+    console.log("Connected to MySQL database.");
+  }
+});
+
+// Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
+// Create logs folder if missing
 if (!fs.existsSync(LOGS_FOLDER)) {
   fs.mkdirSync(LOGS_FOLDER);
 }
 
+// (Optional) Create CSV backup file
 if (!fs.existsSync(LOG_PATH)) {
   fs.writeFileSync(LOG_PATH, "Timestamp,Name,Phone\n");
 }
 
+// Handle form submission
 app.post("/submit", (req, res) => {
-  const { name, phone } = req.body;
+  const { user_name, phone } = req.body;
   const timestamp = new Date().toISOString();
-  fs.appendFileSync(LOG_PATH, `"${timestamp}","${name}","${phone}"\n`);
-  currentUser = name;
-  formCompleted = true; // Kada je forma popunjena, omogućavamo USB pristup
 
-  // Pozivanje skripti za omogućavanje pristupa za D: i E: drive
-  enableUSBDrive("D");
-  enableUSBDrive("E");
+  // Backup log to CSV (optional)
+  fs.appendFileSync(LOG_PATH, `"${timestamp}","${user_name}","${phone}"\n`);
 
-  res.send("Data saved. You can now use the USB.");
-});
+  // Save to MySQL
+  db.query(
+    "INSERT INTO usb_users (timestamp, user_name, phone) VALUES (?, ?, ?)",
+    [timestamp, user_name, phone],
+    (err) => {
+      if (err) {
+        console.error("MySQL insert error:", err);
+        return res.status(500).send("Database error.");
+      }
 
-app.get("/log", (_, res) => {
-  const csv = fs.readFileSync(LOG_PATH, "utf-8");
-  const lines = csv.trim().split("\n").slice(1);
-  const rows = lines.map((line) =>
-    line.split(",").map((cell) => cell.replace(/\"/g, ""))
+      currentUser = user_name;
+      formCompleted = true;
+      enableUSBDrive("D");
+      enableUSBDrive("E");
+      res.send("Data saved to database. You can now use the USB.");
+    }
   );
-  res.json(rows);
 });
 
+// View logs from database
+app.get("/log", (_, res) => {
+  db.query(
+    "SELECT * FROM usb_users ORDER BY timestamp DESC",
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching logs:", err);
+        return res.status(500).send("Failed to fetch logs.");
+      }
+      res.json(results);
+    }
+  );
+});
+
+// Handle socket connection
 io.on("connection", (socket) => {
   console.log("A user connected");
 
@@ -63,19 +102,23 @@ io.on("connection", (socket) => {
   usbDetect.on("remove", (device) => {
     console.log("USB removed:", device);
     usbJustRemoved = true;
-    socket.emit("usb-removed", { removed: usbJustRemoved, name: currentUser });
+    socket.emit("usb-removed", { removed: usbJustRemoved, user_name: currentUser });
     usbJustRemoved = false;
   });
 });
 
-// Pokreni monitoring USB uređaja
+// Start server
 server.listen(PORT, () => {
   usbDetect.startMonitoring();
 
   usbDetect.on("add", (device) => {
     console.log("USB inserted:", device);
 
-    // Provera da li je uređaj USB storage
+    // Hide the drive immediately regardless of form status
+    disableUSBDrive("D");
+    disableUSBDrive("E");
+
+    // Check if device is storage
     if (
       device.deviceDescriptor &&
       device.deviceDescriptor.deviceClass === 0x08 &&
@@ -83,16 +126,15 @@ server.listen(PORT, () => {
     ) {
       console.log("USB is a storage device.");
 
-      // Ako forma nije popunjena, blokiraj pristup i pokreni skriptu za onemogućavanje pristupa
-      if (!formCompleted) {
-        console.log(
-          "USB detected but form not completed. Blocking USB access."
-        );
-        disableUSBDrive("D");
-        disableUSBDrive("E");
+      if (formCompleted) {
+        console.log("Form completed — re-enabling drives.");
+        enableUSBDrive("D");
+        enableUSBDrive("E");
+      } else {
+        console.log("Form NOT completed — USB stays hidden.");
       }
     } else {
-      console.log("USB is not a storage device or lacks device descriptor.");
+      console.log("Device is not USB storage or missing descriptor.");
     }
 
     exec(`start http://localhost:${PORT}`);
@@ -101,6 +143,7 @@ server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
 
+// Enable drive (using diskpart script)
 function enableUSBDrive(driveLetter) {
   const scriptPath = path.join(
     __dirname,
@@ -117,7 +160,7 @@ function enableUSBDrive(driveLetter) {
   });
 }
 
-
+// Disable drive (using diskpart script)
 function disableUSBDrive(driveLetter) {
   const scriptPath = path.join(
     __dirname,

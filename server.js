@@ -101,7 +101,6 @@ server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
 
-// Funkcija za omogućavanje USB diska
 function enableUSBDrive(driveLetter) {
   const scriptPath = path.join(
     __dirname,
@@ -118,7 +117,7 @@ function enableUSBDrive(driveLetter) {
   });
 }
 
-// Funkcija za onemogućavanje USB diska
+
 function disableUSBDrive(driveLetter) {
   const scriptPath = path.join(
     __dirname,
